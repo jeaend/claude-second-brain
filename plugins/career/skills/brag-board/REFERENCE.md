@@ -1,6 +1,6 @@
 # Brag Board — Reference
 
-Supplementary details for the `brag-board` skill. SKILL.md is the entrypoint; load this when the user needs to wire up the cron job, debug headless runs, or extend the skill with a new source/sync type.
+Supplementary details for the `brag-board` skill. SKILL.md is the entrypoint; load this when the user needs to wire up the cron job, debug headless runs, or extend the skill with a new source/sync type. See [README.md](README.md) for a visual overview.
 
 ## Running headlessly (cron, launchd, Task Scheduler)
 
@@ -56,18 +56,18 @@ If a source fails, the skill logs the failure to `.brag-log.jsonl` and continues
 
 ### Output and debugging
 
-Redirect stdout + stderr to a log file so failures are diagnosable after the fact:
+Redirect stdout + stderr to a log file so failures are diagnosable after the fact. The cron-install step bakes the user's brag-board folder path directly into the cron line, so `cron.log` ends up inside that folder:
 
 ```
-0 9 * * 1-5 ... >> ~/.brag-board/cron.log 2>&1
+0 9 * * 1-5 ... >> ~/Documents/brag-board/cron.log 2>&1
 ```
 
 Rotate `cron.log` occasionally (logrotate, or a periodic `mv` in another cron job) — it can grow.
 
 To diagnose a failing cron job:
 
-1. Read `~/.brag-board/cron.log` — captures shell-level errors (auth missing, command not found).
-2. Read `.brag-log.jsonl` next to the brag doc — captures skill-level info (sources scanned, failures per source).
+1. Read `<brag-board-folder>/cron.log` — captures shell-level errors (auth missing, command not found).
+2. Read `<brag-board-folder>/.brag-log.jsonl` — captures skill-level info (sources scanned, failures per source).
 3. If both are silent, the cron itself isn't firing. Check with `grep CRON /var/log/syslog` (Linux) or `log show --predicate 'process == "cron"' --last 1d` (macOS).
 
 ### Platform-specific schedulers
@@ -104,21 +104,33 @@ None of these exist yet — when adding one, validate the field set against its 
 What each source type can plausibly yield. Use this when implementing the per-day scan for a given source. If a signal isn't reliably present, leave the field `—` rather than guess.
 
 ### Code hosts (GitHub, GitLab, Bitbucket)
+The PR description is the **primary source for entry content**. Read it carefully — most fields below can be inferred from it.
+
+- **Title** → PR title (cleaned of conventional prefixes like `feat:`, `fix:`, `[ABC-123]`).
+- **Impact** → from PR description: look for "why", "motivation", "context", or business-value language. Extract the 1-line outcome. If the description has a "Summary" or "Why" section, prefer that.
+- **Skills** → from PR description + changed files: technologies mentioned (frameworks, languages, infra), patterns described (refactor, migration, perf optimization), domain (auth, billing, search). Free-form, not a fixed allowlist.
 - **Project** → repo name (`owner/repo` → `repo` slug). Fallback if no ticket-tracker source.
 - **Type** → `shipped` (PR merged), `fixed` (PR with "fix"/"bug" labels), `reviewed` (PR I reviewed but didn't author — promote with caution; reviewer ≠ contributor of substance).
 - **Role** → `lead`/`contributor` (PR author), `reviewer` (PR reviewer).
 - **Status** → `done` (PR merged), `in-progress` (PR open).
-- **Metrics** → +/- LOC, files changed, review approvals.
+- **Metrics** → +/- LOC, files changed, review approvals. Also pull any numeric claims from the PR description (e.g., "reduced p95 latency by 40%").
 - **Evidence** → PR URL, linked issues, linked tickets (rich cross-source signal).
+- **Raw context** → full PR description body, verbatim.
 
 ### Ticket trackers (Jira, Linear, Asana, etc.)
+The ticket description + comments are the **primary source for entry content**, often richer than a PR description because they include problem framing, constraints, and acceptance criteria.
+
+- **Title** → ticket title (cleaned of prefixes like `[ABC-123]`).
+- **Impact** → from ticket description: look for "acceptance criteria", "outcome", "goal", "definition of done". Synthesize the 1-line business or technical outcome. Resolution comment (when present) often has the cleanest impact statement.
+- **Skills** → from ticket description + labels/components: domain (search, auth, billing), technologies, methodologies (incident response, design review, cross-team coordination).
 - **Project** → epic name (best signal — epics already group work into projects).
 - **Type** → `shipped`/`built` (Story closed), `fixed` (Bug closed), `learned` (Spike closed), `decided` (RFC/Decision closed).
 - **Role** → `lead`/`contributor` (assignee), `initiator` (reporter), `reviewer` (commenter only).
 - **Status** → direct from ticket status field.
 - **Stakeholders** → ticket watchers/commenters (roles only, never real names).
-- **Metrics** → story points, time-in-status, linked PR count.
+- **Metrics** → story points, time-in-status, linked PR count. Also pull any numeric claims from the ticket description or resolution comment.
 - **Evidence** → ticket URL, linked PRs, linked docs.
+- **Raw context** → full ticket description + resolution comment, verbatim.
 
 ### Calendars (Google, Outlook)
 - **Project** → calendar event series name / parent meeting.
@@ -128,8 +140,17 @@ What each source type can plausibly yield. Use this when implementing the per-da
 - **Evidence** → calendar event URL, attached docs.
 
 ### Messaging (Slack, Teams)
-- **Filter strictly to messages *you posted***. Never pull others' messages — privacy + signal-to-noise.
-- **Type** → `shipped` (keywords: shipped, launched, deployed, ship-it), `learned` (keywords: TIL, learned, figured out), `decided` (keywords: decided, going with, plan is).
+- **Hard rule**: filter strictly to messages *you posted*. Never pull others' messages.
+- **Scope**: broad — any channel/DM the user has access to. The filter happens at the content level (below). Optional `channels_blocklist` in config to always exclude specific channels.
+- **Content filter** (the real work): only include messages that signal a **work accomplishment** — shipped, launched, decided, mentored, presented, learned-with-substance. Explicit excludes:
+  - Personal venting / frustration ("ugh this is awful")
+  - Complaints about coworkers
+  - Social chatter (birthdays, lunch plans, weekend banter)
+  - Logistics ("moving the meeting to 3pm")
+  - "I'm so tired" / mood content
+  - One-line acknowledgements without substance ("nice!", "lgtm", "thx")
+- **The line**: the message describes *work product, decisions, learnings, or outcomes* — not feelings, social activity, or coordination. When unsure, exclude. False negatives (missed brags) are fine; false positives (vent surfacing in a brag doc) are not.
+- **Type** → `shipped` (keywords: shipped, launched, deployed, ship-it), `learned` (keywords: TIL, learned, figured out, with concrete content), `decided` (keywords: decided, going with, plan is, with rationale).
 - **Role** → usually `lead` if you're announcing the work.
 - **Stakeholders** → channel scope only (e.g., "#eng-platform announcement"), not individual reactions.
 - **Evidence** → permalink to the message.
@@ -168,33 +189,37 @@ Sync targets receive entries after the local write succeeds. To add one:
 
 ## Schema reference
 
-### `~/.brag-board/config.json`
+### Config
+
+Lives at `<folder>/config.json` (folder set by user in setup, default `~/Documents/brag-board/`). A one-line pointer file at `~/.brag-board/path` records the absolute path to this config so subsequent runs can find it.
 
 ```jsonc
 {
-  "doc_path": "~/Documents/brag-doc.md",
+  "schema_version": 1,
+  "folder": "~/Documents/brag-board/",
+  "doc_filename": "brag-doc.md",
+  "timezone": "America/Toronto",
+  "user_instructions": "Focus on technical leadership and cross-team work. Skip minor flake fixes.",
   "sources": [
-    {
-      "type": "github",
-      "filter": { "author": "me" }
-    },
-    {
-      "type": "calendar",
-      "filter": { "keywords": ["shipped", "launched", "demo"] }
-    }
+    { "type": "github", "filter": { "author": "me" } },
+    { "type": "calendar", "filter": { "keywords": ["shipped", "launched", "demo"] } },
+    { "type": "slack", "filter": { "channels_blocklist": [] } }
   ],
   "sync_to": [
-    { "type": "notion", "page_id": "abc123" }
+    { "type": "notion", "page_id": "abc123" },
+    { "type": "slack", "target": "@me", "format": "summary" }
   ],
-  "cron": {
-    "schedule": "0 9 * * 1-5",
-    "window": "24h"
-  },
+  "cron": { "schedule": "0 9 * * 1-5", "window": "24h" },
   "confirm_before_writing": true
 }
 ```
 
+- `user_instructions`: free-form preferences from the wizard's "any other instructions" step. Applied to every run's candidate filter. Empty string if the user has no extra preferences.
+- `folder` + `doc_filename` together resolve the brag doc path. All sibling files (`.brag-log.jsonl`, ad-hoc files, `cron.log`) live in the same folder.
+
 ### `.brag-log.jsonl` (one record per run)
+
+Lives at `<folder>/.brag-log.jsonl`.
 
 ```jsonc
 {
@@ -202,15 +227,18 @@ Sync targets receive entries after the local write succeeds. To add one:
   "mode": "cron",                          // "cron" or "on-demand"
   "window": "24h",
   "dates_scanned": ["2026-05-23"],
-  "sources": ["github", "calendar"],
+  "sources": ["github", "calendar", "slack"],
   "candidates": 5,
   "appended": 3,
   "skipped_dup": 2,
+  "promoted_to_main": [],                  // on-demand: entries added to primary doc from ad-hoc
+  "updated_in_main": [],                   // on-demand: sparse entries upgraded with richer info
   "source_failures": [],
   "sync_results": [
-    { "type": "notion", "ok": true }
+    { "type": "notion", "ok": true },
+    { "type": "slack", "ok": true }
   ],
-  "output_file": "~/Documents/brag-doc.md"  // or the ad-hoc filename
+  "output_file": "brag-doc.md"             // or "brag-doc-adhoc-2026-05-23-last-2-weeks.md" for on-demand
 }
 ```
 

@@ -21,16 +21,21 @@ Trigger phrases:
 
 ## First-run setup
 
-If `~/.brag-board/config.json` does not exist, run the setup wizard:
+The skill keeps a tiny pointer file at `~/.brag-board/path` containing the absolute path to the user's brag-board folder. If that pointer does not exist (or the path it points to is missing), run the setup wizard:
 
-1. Ask for the primary brag doc path. Default: `~/Documents/brag-doc.md`.
-   - If the file exists: read it, build the dedup index from any source IDs it already contains, warn (but don't refuse) on malformed entries.
-   - If missing: create it with a schema-version header (see "Entry shape" below).
+1. Ask for the brag-board folder. Default: `~/Documents/brag-board/`. The folder holds:
+   - `brag-doc.md` — the primary brag doc
+   - `config.json` — your decisions from this wizard
+   - `.brag-log.jsonl` — run history
+   - `brag-doc-adhoc-*.md` — ad-hoc backfill files
+   - `cron.log` — cron stdout/stderr (if cron is enabled)
+
+   Create the folder if missing. If `brag-doc.md` exists inside it, read it and build the dedup index from any source IDs it already contains; warn (but don't refuse) on malformed entries. If missing, create it with a schema-version header (see "Entry shape" below).
 2. **Discover sources broadly.** Enumerate every MCP detected at runtime and offer any that could plausibly surface accomplishments — be inclusive, not selective. Common categories:
    - **Code hosts** — GitHub, GitLab, Bitbucket (PRs, commits, merged branches).
    - **Ticket trackers** — Jira, Linear, Asana, etc. (closed/shipped tickets, epics for `Project` inference).
    - **Calendars** — Google Calendar, Outlook (events with keywords like "shipped", "launched", "demo", "presented", "1:1").
-   - **Messaging** — Slack, Teams (messages *you posted* with shipping language; never pull others' messages).
+   - **Messaging** — Slack, Teams (messages *you posted* — never pull others' messages). Scope can be broad (any channel/DM you have access to). The filtering happens at the **content level**: include only messages that signal a work accomplishment (shipped, launched, decided, mentored, presented, learned-with-substance). Skip personal venting, complaints about coworkers, social chatter (birthdays, lunch plans), logistics. Optional `channels_blocklist` in config for channels to always exclude.
    - **Docs / wikis** — Notion, Confluence, Google Docs (pages you authored or substantially edited).
    - **Any other MCP** that exposes user activity — ask the user whether to include it.
 
@@ -38,26 +43,37 @@ If `~/.brag-board/config.json` does not exist, run the setup wizard:
 3. Ask about optional sync targets. List available MCPs that could be destinations (Notion, Google Docs, etc.). For each, ask for the target identifier (page ID, doc ID). **Warn the user explicitly**: "Sync sends full entry content including raw source snippets to <target>. Continue?" — entry content may include real names, ticket IDs, and other data they may not want in the cloud target.
 4. Ask about cron: schedule (default `0 9 * * 1-5` — weekdays at 9am) and default window (default `24h`).
 5. Ask for the time zone to use for day-grouping. Default: local TZ. Sources report in mixed TZs (GitHub UTC, calendar local) — the skill normalizes to this TZ when bucketing entries to dates. Matches "what did I do today" intuition.
-6. Write `~/.brag-board/config.json`. Schema:
+6. Ask for **any other instructions** — free-form preferences the user wants applied to every run. Examples to surface: "focus on technical leadership work", "exclude minor bug fixes from CI flakes", "prioritize cross-team coordination", "always include security-related work", "skip anything tagged `chore`". Stored as `user_instructions` in config and applied at candidate-filtering time (the skill checks each candidate against these instructions before including it).
+7. Write the brag-board folder structure:
+   - `<folder>/config.json` — schema below.
+   - `~/.brag-board/path` — one-line pointer file containing the absolute path to `<folder>/config.json`.
+
+   Config schema:
 
 ```json
 {
   "schema_version": 1,
-  "doc_path": "~/Documents/brag-doc.md",
+  "folder": "~/Documents/brag-board/",
+  "doc_filename": "brag-doc.md",
   "timezone": "America/Toronto",
+  "user_instructions": "Focus on technical leadership and cross-team work. Skip minor flake fixes.",
   "sources": [
     {"type": "github", "filter": {"author": "me"}},
-    {"type": "calendar", "filter": {"keywords": ["shipped", "launched", "demo"]}}
+    {"type": "calendar", "filter": {"keywords": ["shipped", "launched", "demo"]}},
+    {"type": "slack", "filter": {"channels_blocklist": []}}
   ],
   "sync_to": [
-    {"type": "notion", "page_id": "abc123"}
+    {"type": "notion", "page_id": "abc123"},
+    {"type": "slack", "target": "@me", "format": "summary"}
   ],
   "cron": {"schedule": "0 9 * * 1-5", "window": "24h"},
   "confirm_before_writing": true
 }
 ```
 
-7. Offer to help install the cron entry. Don't silently edit `crontab` / `launchd` / Task Scheduler — always require explicit confirmation. Flow:
+   All derived paths come from `folder` + filename conventions (no need for absolute paths inside config). Set `user_instructions` to `""` if the user has no extra preferences.
+
+8. Offer to help install the cron entry. Don't silently edit `crontab` / `launchd` / Task Scheduler — always require explicit confirmation. Flow:
 
    a. Detect platform (macOS / Linux / Windows) and suggest the best mechanism (`launchd` on macOS, `crontab` on Linux, Task Scheduler on Windows). See [REFERENCE.md](REFERENCE.md) for per-platform details.
 
@@ -96,9 +112,13 @@ For one date:
 
 1. For each enabled source, query items in that date's window. Tolerate source-specific failures — log and continue with remaining sources.
 2. Build candidate entries. Each candidate has a **source ID** (see below).
-3. **Dedup**: skip any candidate whose source ID already appears in the primary brag doc. (Ad-hoc files are not consulted for dedup — each ad-hoc artifact is independent.)
-4. If `confirm_before_writing: true` and in on-demand mode, show the user the day's candidates. Let them accept all, skip all, or edit individually.
-5. Append accepted entries to the destination file (see "Output destinations" below).
+3. **Dedup**: classify each candidate against the primary brag doc by source ID:
+   - **Not present** → new entry candidate.
+   - **Present, sparse** (existing entry has multiple `—` fields, the candidate has richer values for those fields) → update candidate.
+   - **Present, equivalent** → skip.
+   Ad-hoc files are not consulted for dedup; only the primary brag doc.
+4. If `confirm_before_writing: true` and in on-demand mode, show the user the day's candidates grouped as new / update / skip. Let them accept all, skip all, or decide individually.
+5. Write accepted entries to the destination file (see "Output destinations" below).
 
 ## Entry shape
 
@@ -176,9 +196,39 @@ If a source's natural ID isn't stable, fall back to a hash of (date + title + fi
 
 ## Output destinations
 
-**Primary (always)**: the local markdown file from `doc_path` (cron) or a generated ad-hoc filename (on-demand). Write to local first — it's the source of truth and the dedup index.
+**Primary brag doc** — the canonical record. Always lives at `<folder>/brag-doc.md`.
+
+**Ad-hoc file** (on-demand only) — a scratchpad artifact for the specific query (e.g., "last 2 weeks for perf review"). Filename described below.
+
+### Write rules per mode
+
+**Cron mode**: append new entries to the primary brag doc. Append-only — never modifies existing entries.
+
+**On-demand mode**: writes to *both* the ad-hoc scratchpad *and* the primary brag doc, with user confirmation:
+
+1. Write all accepted entries to the ad-hoc file (the artifact for this query).
+2. For each entry not already in the primary doc by source ID, ask: *"Add to main brag doc?"* — default yes. This is the gap-fill mechanism for days cron missed.
+3. For each entry whose source ID is in the primary doc but the existing entry is sparse (multiple `—` fields where the ad-hoc has richer values), ask: *"Update main entry with richer info from this run?"* — show a diff. Default yes.
+4. Record promotions in `.brag-log.jsonl` (`promoted_to_main: [<source_id>, ...]`, `updated_in_main: [<source_id>, ...]`).
+
+The primary brag doc thus becomes the canonical "everything I've done" record — cron handles the steady state, ad-hoc backfills patch gaps and improve sparse entries.
 
 **Sync targets (optional)**: each entry in `sync_to` is best-effort. Failures don't block the local write.
+
+Supported sync target types:
+
+- `notion` — appends each entry as a block to a Notion page. Required: `page_id`.
+- `google-docs` — appends entries to a Google Doc. Required: `doc_id`.
+- `slack` — posts to a Slack DM or channel. Required: `target` (`@me` for self-DM, `@username` for another user's DM — discouraged, or `#channel` for a channel). Optional: `format`:
+  - `summary` (default) — one line per day in the form `<YYYY-MM-DD>: <short synthesized summary, with supporting links inline>`. Example:
+    > `2026-05-23: Shipped onboarding flow ([PR #1234](url)); fixed auth race condition ([JIRA-456](url)); mentored junior eng on testing patterns.`
+    For a multi-day backfill, post one such line per day, newest first.
+  - `full` — each entry posted as a separate message with all fields (sensitive — see safety rules below).
+
+**Slack sync safety rules**:
+- Default `format` is `summary` — full entry content can include sensitive context (metrics, stakeholder roles, raw source bodies).
+- For `target`: `@me` (self-DM) is the only safe default. Other DMs or channels require explicit user confirmation during wizard setup, and a warning at every cron run: *"Brag entries will be posted to <target>. Continue?"*
+- Never post to a channel without explicit channel allowlist (same rule as messaging *sources*).
 
 ### Ad-hoc filename
 
@@ -211,6 +261,7 @@ If the run is interrupted, the last successful date is recoverable from this log
 ## Gotchas
 
 - **Don't bake in any company, tool, or coworker name.** This skill is published publicly. All source/sync target identifiers come from user config at runtime.
+- **Messaging platforms: filter at the content level, not the channel level.** Scope can be broad (any channel/DM the user has access to), but **only include messages that signal a work accomplishment**. Explicit excludes: personal venting, complaints about coworkers, social chatter (birthdays, lunch), logistics, expressions of frustration. The line: a message describes *work product, decisions, learnings, or outcomes*, not feelings or social activity. When unsure, exclude — false negatives are fine, false positives are not (a misclassified vent in a brag doc is embarrassing). Never include messages authored by anyone other than the user.
 - **Cron + ad-hoc concurrent runs**: if both fire simultaneously, dedup by source ID prevents duplicate entries in the primary file. Ad-hoc files are independent so they don't compete. A `.brag-board.lock` next to the doc is a nice-to-have, not required.
 - **Don't silently edit the user's crontab/launchd/Task Scheduler.** Print the suggested line; the user installs it.
 - **First cron tick on a fresh config**: stick to the configured window (default 24h). Don't auto-backfill — that's what ad-hoc mode is for. Suggest the user run an ad-hoc backfill if they want history.
