@@ -104,6 +104,32 @@ None of these exist yet — when adding one, validate the field set against its 
 
 What each source type can plausibly yield. Use this when implementing the per-day scan for a given source. If a signal isn't reliably present, leave the field `—` rather than guess.
 
+### Source retention reference
+
+What history each source typically holds. Used by the retention pre-flight check in the run flow to warn users when a requested window exceeds what a source can return.
+
+| Source | Typical retention | Notes |
+|--------|------------------|-------|
+| Slack | 90 days (Free / many corp policies) | Hard cap. Cron captures continuously; backfills > 90d are incomplete. |
+| Notion (edit history) | 7d (Free) / 30d (Plus) / 90d (Business) / 1yr (Enterprise) | Current page state is always available; only edit-history queries are bounded. |
+| Gmail | Workspace-defined (often 1–3 years corp; indefinite personal) | Treat older mail as potentially missing. |
+| Google Calendar | Generally indefinite; some corp policies cap at 1–3 years | Deleted recurring series lose instance history. |
+| Jira / Linear / Asana | Indefinite on paid plans | Archived projects may restrict access. |
+| Confluence | Indefinite on paid plans | Rarely an issue. |
+| GitHub / GitLab / Bitbucket | Indefinite (commits, PRs, issues) | Deleted repos lose everything. |
+| Preset / Tableau / Looker | As long as the artifact exists | Deleted dashboards lose everything. |
+
+**Behavior when a window exceeds retention**:
+
+- **Cron mode**: log silently in `.brag-log.jsonl` as `source_retention_gaps: [{ "source": "<x>", "missing_before": "<date>" }]`. Don't block the run.
+- **On-demand mode**: warn the user before scanning: *"\<source\> typically retains \<window\>. Entries from before \<date\> won't be captured from this source."* Then proceed.
+
+**Other operational limits worth knowing** (not retention but related):
+
+- **GitHub API rate limits**: 5000 req/hr authenticated. A 90-day backfill across many repos can hit this. MCPs typically paginate + cache; only a concern for very large backfills.
+- **Archived projects/repos**: source IDs may 404 when fetching evidence. Treat as `source_failures` and continue.
+- **Deleted records**: source IDs remain in the brag doc (dedup still works), but `Evidence` links may 404. Acceptable trade-off — the doc remembers the work happened.
+
 ### Source-ID formats (dedup keys)
 
 | Source type | Format |
@@ -196,6 +222,11 @@ If multiple signals overlap (e.g., a PTO + a team off-site on the same day), pre
 - **Default rule**: filter to messages *you posted*. Don't pull others' messages — privacy + signal-to-noise.
 - **Exception — shout-outs**: pull others' messages when they explicitly recognize the user (see "Shout-out filter" below). This is the one allowed case of capturing others' content.
 - **Scope**: broad — any channel/DM the user has access to. The filter happens at the content level (below). Optional `channels_blocklist` in config to always exclude specific channels. Separate `kudos_channels` allowlist for dedicated shout-out channels (treated specially — see below).
+- **Retention limit (important)**: Slack workspaces commonly retain only **the last 90 days** of message history (Free tier default + many corporate retention policies). Beyond that window, Slack returns nothing — not because there's nothing to find, but because the data is gone.
+  - **Implication for cron**: not a problem. Daily runs always look at the last 24-72h, well within retention.
+  - **Implication for ad-hoc backfills**: requesting a window > 90 days returns incomplete data from Slack. Other sources (Jira, GitHub, Notion) typically have longer retention and still work.
+  - **Skill behavior**: when an ad-hoc window exceeds 90 days and Slack is an enabled source, **warn the user explicitly**: *"Slack data beyond 90 days isn't retained — entries from before \<date\> won't be captured from Slack. Other sources will still scan the full window."* Log the limitation in `.brag-log.jsonl` (`source_retention_gaps: [{ "source": "slack", "missing_before": "<date>" }]`).
+  - **Mitigation**: rely on cron to capture Slack data continuously; don't expect ad-hoc backfills to recover historical Slack content beyond the retention window.
 - **Content filter** (the real work): only include messages that signal a **work accomplishment** — shipped, launched, decided, mentored, presented, learned-with-substance. Explicit excludes:
   - Personal venting / frustration ("ugh this is awful")
   - Complaints about coworkers
@@ -293,6 +324,7 @@ When the wizard detects a known vendor MCP, it pre-fills suggestions from this t
 - **Default `kudos_channels`**: empty — explicitly ask: *"Do you have any dedicated kudos / shout-out channels (e.g., `#kudos`, `#team-wins`)?"*
 - **Default `channels_blocklist`**: empty — the user can add channels they want to exclude.
 - **Default workflow question**: *"Do you announce shipped work in any specific channel? Are there channels worth always excluding (social, off-topic)?"*
+- **Retention awareness**: surface during setup: *"Slack often retains only the last 90 days. Cron will capture continuously; ad-hoc backfills beyond 90 days won't recover historical Slack data."* See "Retention limit" in the Messaging inference section above.
 
 ### Notion / Confluence / Google Docs
 - **Default capture**: pages the user authored or substantially edited (heuristic: ≥ 50% of diff is theirs, or they're the page creator).
@@ -304,37 +336,7 @@ When the wizard detects a known vendor MCP, it pre-fills suggestions from this t
 - **Default heuristic** for "substantial": chart is named (not auto-titled), published to a non-personal workspace, or has > 1 consumer.
 - **Default workflow question**: *"Which workspaces / folders contain dashboards you want tracked? Which are scratch space?"*
 
-### Wizard behavior
-
-For each detected MCP, the wizard:
-
-1. Shows the vendor defaults from this section as a structured prompt: *"Apply these defaults for \<vendor\>? Adjust before saving?"*
-2. For each default that requires user input (workflow question, channel allowlist, repo allowlist), asks a follow-up structured prompt with the suggested phrasing above.
-3. Saves the answers to `sources[].filter` and `sources[].workflow_notes`.
-
-When a new vendor is added that isn't in this table, the wizard asks the user from scratch and offers to save the resulting defaults here (via a code change, not at runtime — keeps the defaults curated).
-
-## Extending the skill
-
-### Adding a new source type
-
-Sources are anything that can yield candidate accomplishments for a date window. To add one:
-
-1. Pick a source-ID prefix that won't collide (`figma:`, `confluence:`, `gmail:`, etc.).
-2. In the per-day scan, when the source type is in `config.sources`, query items in the day's window.
-3. Map each item to a candidate entry with: title, impact (best-guess from item description), evidence (link to the item), source ID, tags.
-4. Document the query/filter shape in `config.sources` so the user knows what to put there.
-
-Don't hard-code provider names beyond the source-ID prefix. The actual querying goes through whatever MCP is configured.
-
-### Adding a new sync target
-
-Sync targets receive entries after the local write succeeds. To add one:
-
-1. Pick a `type` string for the config (`notion`, `google-docs`, `obsidian`, etc.).
-2. Document the required identifier fields in `config.sync_to` (page ID, doc ID, vault path).
-3. Implement entry rendering for that target (markdown → Notion blocks, markdown → Google Docs API requests, etc.).
-4. On failure, log to `.brag-log.jsonl` `sync_results` and continue — never roll back the local write.
+**Wizard usage**: for each enabled source, the wizard shows the defaults above as a structured prompt (*"Apply these defaults for \<vendor\>? Adjust?"*), asks the workflow follow-up question, then saves answers to `sources[].filter` and `sources[].workflow_notes`. New vendor not in this table → wizard asks from scratch; add to this table afterward to make future setups smoother.
 
 ## Schema reference
 

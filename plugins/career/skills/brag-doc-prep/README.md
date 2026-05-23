@@ -13,13 +13,13 @@ flowchart TD
     CronInstall -->|Skip| Ready
 
     Cfg -->|Yes| Mode{Mode}
-    Mode -->|BRAG_DOC_PREP_MODE=cron| C[Cron mode<br/>24h window, no prompts]
+    Mode -->|BRAG_DOC_PREP_MODE=cron| C[Cron mode<br/>adaptive window<br/>since last run,<br/>no prompts]
     Mode -->|interactive| O[On-demand<br/>user timeframe]
 
     C --> Loop[For each date,<br/>latest first]
     O --> Loop
 
-    Loop --> Scan[Per-day scan:<br/>query sources →<br/>apply workflow_notes +<br/>user_instructions →<br/>content filter →<br/>classify vs main doc<br/>new / update / skip]
+    Loop --> Scan[Per-day scan:<br/>query sources →<br/>apply workflow_notes +<br/>user_instructions →<br/>content filter →<br/>classify vs main doc<br/>new / update / skip<br/>0 candidates → absence-context scan<br/>PTO / holiday / off-site → Type: away]
 
     Scan --> W{Mode}
     W -->|cron| MainAppend[Append new entries<br/>to main brag doc<br/>append-only]
