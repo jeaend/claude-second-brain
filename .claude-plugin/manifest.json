@@ -1,0 +1,13 @@
+{
+  "schema_version": "1.0",
+  "type": "marketplace",
+  "name": "claude-second-brain",
+  "display_name": "Jeanne's Claude Second Brain Marketplace",
+  "description": "Personal Claude skills marketplace for jeaend.",
+  "version": "0.1.0",
+  "homepage_url": "https://github.com/jeaend/claude-second-brain",
+  "repository_url": "https://github.com/jeaend/claude-second-brain",
+  "license": "MIT",
+  "skills_dir": "skills",
+  "documentation_url": "https://github.com/jeaend/claude-second-brain#readme"
+}
