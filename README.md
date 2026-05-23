@@ -12,16 +12,24 @@ Installable with:
 
 ## Repository layout
 
-- `.claude-plugin/manifest.json` — makes the repo installable as a Claude marketplace.
-- `skills/` — contains marketplace skills, one folder per skill.
+- `.claude-plugin/marketplace.json` — marketplace catalog (lists plugins).
+- `plugins/<plugin>/` — one folder per plugin, each with its own `.claude-plugin/plugin.json` and `skills/`.
 - `CLAUDE.md` — skill shape, writing principles, and the pre-commit sensitive-content checklist.
 - `CHANGELOG.md` — tracks public releases.
 - `LICENSE` — MIT open-source license.
 
 ## Skills
 
+### Overview
+
+| Plugin | Skills | Description |
+|--------|--------|-------------|
+| **career** | _none yet_ | Career-oriented skills, brag board, and other professional self-tracking,  helpers. |
+
+### By plugin
+
 <details>
-<summary>Click to expand the full skill list</summary>
+<summary><strong>career</strong></summary>
 
 | Skill | Description |
 |-------|-------------|
@@ -31,7 +39,12 @@ Installable with:
 
 ## Adding a new skill
 
-See [CLAUDE.md](CLAUDE.md) for the skill folder shape, the `SKILL.md` frontmatter template, and the sensitive-content checklist to run before committing.
+First decide: does the skill fit an **existing plugin**, or does it need a **new plugin**?
+
+- **Existing plugin** — drop the skill into `plugins/<plugin>/skills/<skill-name>/`.
+- **New plugin** — scaffold `plugins/<new-plugin>/.claude-plugin/plugin.json` and add an entry to `.claude-plugin/marketplace.json`, then add the skill under `plugins/<new-plugin>/skills/<skill-name>/`.
+
+See [CLAUDE.md](CLAUDE.md) for the full checklist — skill folder shape, `SKILL.md` frontmatter template, and the sensitive-content check to run before committing.
 
 
 ## License

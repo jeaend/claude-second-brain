@@ -4,14 +4,15 @@ This is a **public** skills marketplace (`jeaend/claude-second-brain`). Treat ev
 
 ## Repository layout
 
-- `.claude-plugin/manifest.json` — marketplace manifest.
-- `skills/<skill-name>/` — one folder per skill.
+- `.claude-plugin/marketplace.json` — marketplace catalog. Lists each plugin and its source path.
+- `plugins/<plugin>/.claude-plugin/plugin.json` — plugin manifest (name, description, version, author).
+- `plugins/<plugin>/skills/<skill-name>/` — one folder per skill, inside its parent plugin.
 - `CHANGELOG.md` — bumped per public release.
 - `LICENSE` — MIT.
 
 ## Skill shape
 
-Each skill lives at `skills/<skill-name>/`. Naming: lowercase, hyphen-separated (`meeting-notes`, not `MeetingNotes`).
+Each skill lives at `plugins/<plugin>/skills/<skill-name>/`. Naming: lowercase, hyphen-separated (`meeting-notes`, not `MeetingNotes`).
 
 Files:
 
@@ -65,11 +66,14 @@ Project-specific edge cases. Skip the section if there aren't any.
 
 ## When adding a new skill — checklist
 
-1. Create the folder: `skills/<skill-name>/SKILL.md` (plus optional `REFERENCE.md` and `scripts/`).
-2. Write the skill using the shape above. Make the `description` pushy with explicit trigger phrases.
-3. Append a row to the skills table in [README.md](README.md) (`Skill | Description`). Remove the `_No skills yet_` placeholder row when the first real skill is added.
-4. Bump `CHANGELOG.md` with a one-line entry under the next version.
-5. Run the sensitive-content check below before staging anything.
+1. Pick the plugin. If a fitting one exists under `plugins/`, use it. Otherwise scaffold a new plugin (`plugins/<plugin>/.claude-plugin/plugin.json`) and add an entry to `.claude-plugin/marketplace.json`.
+2. Create the folder: `plugins/<plugin>/skills/<skill-name>/SKILL.md` (plus optional `REFERENCE.md` and `scripts/`).
+3. Write the skill using the shape above. Make the `description` pushy with explicit trigger phrases.
+4. Update [README.md](README.md):
+   - Update the overview table row for the plugin (skills column + description if it changed).
+   - Add a row to the plugin's dropdown table (`Skill | Description`).
+5. Bump `CHANGELOG.md` with a one-line entry under the next version.
+6. Run the sensitive-content check below before staging anything.
 
 ## Before staging any change — sensitive-content check
 

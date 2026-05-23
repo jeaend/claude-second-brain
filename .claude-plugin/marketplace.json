@@ -1,0 +1,15 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "claude-second-brain",
+  "description": "Jeanne's personal Claude Code marketplace, general-purpose skills, public-safe.",
+  "owner": {
+    "name": "Jeanne Endres"
+  },
+  "plugins": [
+    {
+      "name": "career",
+      "source": "./plugins/career",
+      "description": "Career-oriented skills, brag board, and other professional self-tracking, cv helpers."
+    }
+  ]
+}
