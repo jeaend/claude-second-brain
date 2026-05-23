@@ -24,7 +24,7 @@ Installable with:
 
 | Plugin | Skills | Description |
 |--------|--------|-------------|
-| **career** | brag-board | Career-oriented skills, brag board, and other professional self-tracking, cv helpers. |
+| **career** | brag-doc-prep | Career-oriented skills, brag board, and other professional self-tracking, cv helpers. |
 
 ### By plugin
 
@@ -33,7 +33,7 @@ Installable with:
 
 | Skill | Description |
 |-------|-------------|
-| [brag-board](plugins/career/skills/brag-board/SKILL.md) | Captures professional accomplishments to a personal brag doc — runs daily via cron or on-demand for any timeframe. |
+| [brag-doc-prep](plugins/career/skills/brag-doc-prep/SKILL.md) | Captures professional accomplishments to a personal brag doc — runs daily via cron or on-demand for any timeframe. |
 
 </details>
 

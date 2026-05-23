@@ -1,4 +1,4 @@
-# brag-board
+# brag-doc-prep
 
 Captures professional accomplishments to a personal brag doc — runs daily via cron or on-demand for any timeframe.
 
@@ -13,7 +13,7 @@ flowchart TD
     CronInstall -->|Skip| Ready
 
     Cfg -->|Yes| Mode{Mode}
-    Mode -->|BRAG_BOARD_MODE=cron| C[Cron mode<br/>24h window, no prompts]
+    Mode -->|BRAG_DOC_PREP_MODE=cron| C[Cron mode<br/>24h window, no prompts]
     Mode -->|interactive| O[On-demand<br/>user timeframe]
 
     C --> Loop[For each date,<br/>latest first]
@@ -46,7 +46,7 @@ flowchart TD
 
 ## What it produces
 
-A folder (default `~/Documents/brag-board/`) containing:
+A folder (default `~/Documents/brag-doc/`) containing:
 
 - `brag-doc.md` — the canonical record, append-only on cron runs.
 - `brag-doc-adhoc-<gen-date>-<timeframe-slug>.md` — scratchpad artifacts for ad-hoc queries (perf review prep, "last 2 weeks", etc.).

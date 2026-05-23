@@ -1,11 +1,17 @@
 ---
-name: brag-board
-description: Captures professional accomplishments to a personal brag doc — runs daily via cron or on-demand for any timeframe. Use when the user mentions brag doc, brag board, tracking accomplishments, perf review prep, "log a win", "I shipped X", "what did I accomplish last week/quarter", or wants to back-fill a timeframe of work — even if they don't say "brag-board" explicitly.
+name: brag-doc-prep
+description: Captures professional accomplishments to a personal brag doc — runs daily via cron or on-demand for any timeframe. Use when the user mentions brag doc, brag board, tracking accomplishments, perf review prep, "log a win", "I shipped X", "what did I accomplish last week/quarter", or wants to back-fill a timeframe of work — even if they don't say "brag-doc-prep" explicitly.
 ---
 
-# Brag Board
+# Brag Doc Prep
 
-Scans configured sources (GitHub PRs, calendar, etc. — whatever MCPs are available) and appends accomplishments to a personal markdown brag doc. Designed to run daily on a cron, with ad-hoc backfills for "last 2 weeks", "since April 1", quarterly perf-review prep, etc.
+The **capture layer** for an accomplishments workflow. Scans configured sources (GitHub PRs, calendar, ticket trackers, Slack, etc. — whatever MCPs are available) and appends structured entries to a personal markdown brag doc. Designed to run daily on a cron, with ad-hoc backfills for "last 2 weeks", "since April 1", quarterly perf-review prep, etc.
+
+## What this produces
+
+- **Output unit**: zero or more brag-doc entries per day — typically 0–5, depending on activity. Each day gets its own `## YYYY-MM-DD` section with all that day's entries nested under it. Quiet days produce no entry; days with no activity stay absent from the doc (not "empty day" stubs).
+- **Output shape**: every entry has a rich, predictable structure (see "Entry shape" below) — fields for `Project`, `Type`, `Role`, `Status`, `Impact`, `Metrics`, `Skills`, `Stakeholders`, `Evidence`, plus verbatim raw context.
+- **This is prep, not the final artifact**: the brag doc is *input* to downstream skills — `brag-summary` (per-project recaps), `brag-to-cv` (resume bullets), `brag-perf-review` (perf-review drafts), `brag-weekly-recap` (team updates). The rich entry shape exists so those consumers can group/filter/synthesize without re-fetching original sources. See [REFERENCE.md](REFERENCE.md) → "Companion skills (planned)" for the consumer roster.
 
 ## When to use
 
@@ -21,9 +27,9 @@ Trigger phrases:
 
 ## First-run setup
 
-The skill keeps a tiny pointer file at `~/.brag-board/path` containing the absolute path to the user's brag-board folder. If that pointer does not exist (or the path it points to is missing), run the setup wizard:
+The skill keeps a tiny pointer file at `~/.brag-doc-prep/path` containing the absolute path to the user's brag-doc folder. If that pointer does not exist (or the path it points to is missing), run the setup wizard:
 
-1. Ask for the brag-board folder. Default: `~/Documents/brag-board/`. The folder holds:
+1. Ask for the brag-doc folder. Default: `~/Documents/brag-doc/`. The folder holds:
    - `brag-doc.md` — the primary brag doc
    - `config.json` — your decisions from this wizard
    - `.brag-log.jsonl` — run history
@@ -44,16 +50,16 @@ The skill keeps a tiny pointer file at `~/.brag-board/path` containing the absol
 4. Ask about cron: schedule (default `0 9 * * 1-5` — weekdays at 9am) and default window (default `24h`).
 5. Ask for the time zone to use for day-grouping. Default: local TZ. Sources report in mixed TZs (GitHub UTC, calendar local) — the skill normalizes to this TZ when bucketing entries to dates. Matches "what did I do today" intuition.
 6. Ask for **any other instructions** — free-form preferences the user wants applied to every run. Examples to surface: "focus on technical leadership work", "exclude minor bug fixes from CI flakes", "prioritize cross-team coordination", "always include security-related work", "skip anything tagged `chore`". Stored as `user_instructions` in config and applied at candidate-filtering time (the skill checks each candidate against these instructions before including it).
-7. Write the brag-board folder structure:
+7. Write the brag-doc folder structure:
    - `<folder>/config.json` — schema below.
-   - `~/.brag-board/path` — one-line pointer file containing the absolute path to `<folder>/config.json`.
+   - `~/.brag-doc-prep/path` — one-line pointer file containing the absolute path to `<folder>/config.json`.
 
    Config schema:
 
 ```json
 {
   "schema_version": 1,
-  "folder": "~/Documents/brag-board/",
+  "folder": "~/Documents/brag-doc/",
   "doc_filename": "brag-doc.md",
   "timezone": "America/Toronto",
   "user_instructions": "Focus on technical leadership and cross-team work. Skip minor flake fixes.",
@@ -80,7 +86,7 @@ The skill keeps a tiny pointer file at `~/.brag-board/path` containing the absol
    b. Show the exact command, file, or task definition the user would create. Example for Linux:
 
       ```
-      0 9 * * 1-5 BRAG_BOARD_MODE=cron <claude-invocation> >> ~/.brag-board/cron.log 2>&1
+      0 9 * * 1-5 BRAG_DOC_PREP_MODE=cron <claude-invocation> >> ~/.brag-doc-prep/cron.log 2>&1
       ```
 
    c. Ask: install now, save the snippet for the user to install manually, or skip cron setup. If "install now", run the install command with the user confirming each step — never edit scheduler config without explicit go-ahead.
@@ -93,7 +99,7 @@ To re-run the wizard later: user says "reconfigure brag doc" → overwrite the c
 
 Detect mode:
 
-- `BRAG_BOARD_MODE=cron` env var → **cron mode**: use config defaults, no prompts, write to the primary brag doc.
+- `BRAG_DOC_PREP_MODE=cron` env var → **cron mode**: use config defaults, no prompts, write to the primary brag doc.
 - Otherwise → **on-demand mode**: parse the user's timeframe, write to a new file (see below), prompts according to `confirm_before_writing`.
 
 Then:
@@ -262,7 +268,7 @@ If the run is interrupted, the last successful date is recoverable from this log
 
 - **Don't bake in any company, tool, or coworker name.** This skill is published publicly. All source/sync target identifiers come from user config at runtime.
 - **Messaging platforms: filter at the content level, not the channel level.** Scope can be broad (any channel/DM the user has access to), but **only include messages that signal a work accomplishment**. Explicit excludes: personal venting, complaints about coworkers, social chatter (birthdays, lunch), logistics, expressions of frustration. The line: a message describes *work product, decisions, learnings, or outcomes*, not feelings or social activity. When unsure, exclude — false negatives are fine, false positives are not (a misclassified vent in a brag doc is embarrassing). Never include messages authored by anyone other than the user.
-- **Cron + ad-hoc concurrent runs**: if both fire simultaneously, dedup by source ID prevents duplicate entries in the primary file. Ad-hoc files are independent so they don't compete. A `.brag-board.lock` next to the doc is a nice-to-have, not required.
+- **Cron + ad-hoc concurrent runs**: if both fire simultaneously, dedup by source ID prevents duplicate entries in the primary file. Ad-hoc files are independent so they don't compete. A `.brag-doc-prep.lock` next to the doc is a nice-to-have, not required.
 - **Don't silently edit the user's crontab/launchd/Task Scheduler.** Print the suggested line; the user installs it.
 - **First cron tick on a fresh config**: stick to the configured window (default 24h). Don't auto-backfill — that's what ad-hoc mode is for. Suggest the user run an ad-hoc backfill if they want history.
 - **Source failures are isolated**: one broken MCP shouldn't kill the whole run. Log the failure and continue with the remaining sources.

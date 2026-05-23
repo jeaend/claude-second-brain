@@ -1,6 +1,6 @@
-# Brag Board — Reference
+# Brag Doc Prep — Reference
 
-Supplementary details for the `brag-board` skill. SKILL.md is the entrypoint; load this when the user needs to wire up the cron job, debug headless runs, or extend the skill with a new source/sync type. See [README.md](README.md) for a visual overview.
+Supplementary details for the `brag-doc-prep` skill. SKILL.md is the entrypoint; load this when the user needs to wire up the cron job, debug headless runs, or extend the skill with a new source/sync type. See [README.md](README.md) for a visual overview.
 
 ## Running headlessly (cron, launchd, Task Scheduler)
 
@@ -12,13 +12,13 @@ Use Claude Code's print/headless mode. Exact flag depends on your Claude Code ve
 
 ```bash
 # Print mode (one-shot)
-claude -p "Run the brag-board skill"
+claude -p "Run the brag-doc-prep skill"
 
 # With explicit input
-echo "Run the brag-board skill" | claude -p
+echo "Run the brag-doc-prep skill" | claude -p
 ```
 
-In all cases, set `BRAG_BOARD_MODE=cron` so the skill suppresses prompts and uses config defaults.
+In all cases, set `BRAG_DOC_PREP_MODE=cron` so the skill suppresses prompts and uses config defaults.
 
 ### Authentication in the cron environment
 
@@ -28,12 +28,12 @@ Options:
 
 1. **Inline in the cron line** — least secure, but simplest for personal-machine use:
    ```
-   0 9 * * 1-5 ANTHROPIC_API_KEY=sk-... BRAG_BOARD_MODE=cron claude -p "..."
+   0 9 * * 1-5 ANTHROPIC_API_KEY=sk-... BRAG_DOC_PREP_MODE=cron claude -p "..."
    ```
 
 2. **Source from a file** — keep the key out of crontab:
    ```
-   0 9 * * 1-5 . ~/.claude/env && BRAG_BOARD_MODE=cron claude -p "..."
+   0 9 * * 1-5 . ~/.claude/env && BRAG_DOC_PREP_MODE=cron claude -p "..."
    ```
    With `~/.claude/env` containing `export ANTHROPIC_API_KEY=sk-...` (chmod 600).
 
@@ -49,30 +49,30 @@ MCP servers configured for interactive Claude Code don't automatically work in h
 **Mitigation**: before relying on a source in cron, test it once with a manual headless invocation:
 
 ```bash
-BRAG_BOARD_MODE=cron claude -p "Run the brag-board skill for today only"
+BRAG_DOC_PREP_MODE=cron claude -p "Run the brag-doc-prep skill for today only"
 ```
 
 If a source fails, the skill logs the failure to `.brag-log.jsonl` and continues with remaining sources — the cron job won't silently produce empty days.
 
 ### Output and debugging
 
-Redirect stdout + stderr to a log file so failures are diagnosable after the fact. The cron-install step bakes the user's brag-board folder path directly into the cron line, so `cron.log` ends up inside that folder:
+Redirect stdout + stderr to a log file so failures are diagnosable after the fact. The cron-install step bakes the user's brag-doc folder path directly into the cron line, so `cron.log` ends up inside that folder:
 
 ```
-0 9 * * 1-5 ... >> ~/Documents/brag-board/cron.log 2>&1
+0 9 * * 1-5 ... >> ~/Documents/brag-doc/cron.log 2>&1
 ```
 
 Rotate `cron.log` occasionally (logrotate, or a periodic `mv` in another cron job) — it can grow.
 
 To diagnose a failing cron job:
 
-1. Read `<brag-board-folder>/cron.log` — captures shell-level errors (auth missing, command not found).
-2. Read `<brag-board-folder>/.brag-log.jsonl` — captures skill-level info (sources scanned, failures per source).
+1. Read `<brag-doc-prep-folder>/cron.log` — captures shell-level errors (auth missing, command not found).
+2. Read `<brag-doc-prep-folder>/.brag-log.jsonl` — captures skill-level info (sources scanned, failures per source).
 3. If both are silent, the cron itself isn't firing. Check with `grep CRON /var/log/syslog` (Linux) or `log show --predicate 'process == "cron"' --last 1d` (macOS).
 
 ### Platform-specific schedulers
 
-- **macOS**: `cron` works but Apple deprecates it in favor of `launchd`. For new setups, write a `~/Library/LaunchAgents/com.user.brag-board.plist` with a `StartCalendarInterval`. `launchctl load` it once. More reliable across sleep/wake cycles than `cron`.
+- **macOS**: `cron` works but Apple deprecates it in favor of `launchd`. For new setups, write a `~/Library/LaunchAgents/com.user.brag-doc-prep.plist` with a `StartCalendarInterval`. `launchctl load` it once. More reliable across sleep/wake cycles than `cron`.
 - **Linux**: `crontab -e` is the standard path. `systemd` user timers are the modern alternative if you're already using systemd-user services.
 - **Windows**: Task Scheduler. Create a basic task with a trigger (daily 9am, weekdays) and an action (run `claude.exe -p "..."` with the env var set in the task's environment).
 
@@ -81,14 +81,14 @@ To diagnose a failing cron job:
 Don't trust cron until you've seen it work. Schedule the first run a few minutes out:
 
 ```
-*/5 * * * * BRAG_BOARD_MODE=cron claude -p "..." >> ~/.brag-board/cron.log 2>&1
+*/5 * * * * BRAG_DOC_PREP_MODE=cron claude -p "..." >> ~/.brag-doc-prep/cron.log 2>&1
 ```
 
 Watch `cron.log` and the brag doc for ~10 minutes. Once you've seen one good run, change the schedule to your real one (`0 9 * * 1-5`).
 
 ## Companion skills (planned)
 
-The rich entry shape exists because `brag-board` is intended to be the *capture layer* — future skills will be the *output layer*. Documenting them here keeps the field set honest: if a field doesn't earn its keep across these consumers, drop it.
+The rich entry shape exists because `brag-doc-prep` is intended to be the *capture layer* — future skills will be the *output layer*. Documenting them here keeps the field set honest: if a field doesn't earn its keep across these consumers, drop it.
 
 All consumer skills should output, per item: a **short summary line** (1–2 sentences) plus **supporting links** carried verbatim from the entry's `Evidence` field (PRs, tickets, Notion pages, etc.). Never strip the source links — they're the proof and the path back to context.
 
@@ -191,12 +191,12 @@ Sync targets receive entries after the local write succeeds. To add one:
 
 ### Config
 
-Lives at `<folder>/config.json` (folder set by user in setup, default `~/Documents/brag-board/`). A one-line pointer file at `~/.brag-board/path` records the absolute path to this config so subsequent runs can find it.
+Lives at `<folder>/config.json` (folder set by user in setup, default `~/Documents/brag-doc/`). A one-line pointer file at `~/.brag-doc-prep/path` records the absolute path to this config so subsequent runs can find it.
 
 ```jsonc
 {
   "schema_version": 1,
-  "folder": "~/Documents/brag-board/",
+  "folder": "~/Documents/brag-doc/",
   "doc_filename": "brag-doc.md",
   "timezone": "America/Toronto",
   "user_instructions": "Focus on technical leadership and cross-team work. Skip minor flake fixes.",
