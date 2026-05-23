@@ -72,7 +72,8 @@ To diagnose a failing cron job:
 
 ### Platform-specific schedulers
 
-- **macOS**: `cron` works but Apple deprecates it in favor of `launchd`. For new setups, write a `~/Library/LaunchAgents/com.user.brag-doc-prep.plist` with a `StartCalendarInterval`. `launchctl load` it once. More reliable across sleep/wake cycles than `cron`.
+- **macOS**: `cron` works but Apple deprecates it in favor of `launchd`. For new setups, write a `~/Library/LaunchAgents/com.user.brag-doc-prep.plist` with a `StartCalendarInterval`. `launchctl load` it once.
+  - **Sleep behavior**: `cron` *misses* jobs scheduled during sleep and never catches up. `launchd` doesn't *wake* the Mac, but **catches up on wake** — if the scheduled time fell during sleep, the job fires when the Mac next wakes. For a job that needs to run at the exact wall-clock time even while asleep, pair `launchd` with `pmset schedule` to wake the Mac shortly before the run. For brag-doc-prep at weekday 9am this is usually unnecessary — Mac is almost always awake by then, and a slight catch-up delay is harmless.
 - **Linux**: `crontab -e` is the standard path. `systemd` user timers are the modern alternative if you're already using systemd-user services.
 - **Windows**: Task Scheduler. Create a basic task with a trigger (daily 9am, weekdays) and an action (run `claude.exe -p "..."` with the env var set in the task's environment).
 
@@ -103,19 +104,55 @@ None of these exist yet — when adding one, validate the field set against its 
 
 What each source type can plausibly yield. Use this when implementing the per-day scan for a given source. If a signal isn't reliably present, leave the field `—` rather than guess.
 
+### Source-ID formats (dedup keys)
+
+| Source type | Format |
+|-------------|--------|
+| GitHub PR | `github:owner/repo#1234` |
+| GitHub issue | `github:owner/repo!1234` |
+| Ticket tracker | `<tracker>:<ticket-id>` (e.g. `linear:ENG-5678`, `jira:PROJ-1234`) |
+| Calendar event | `calendar:<event-id>` |
+| Slack message | `slack:<workspace>:<channel>:<ts>` |
+| Notion page edit | `notion:<page-id>` (revision ID if available) |
+| Google Doc edit | `gdoc:<doc-id>:<revision>` |
+| Dashboard/chart | `preset:<workspace>:<chart-or-dashboard-id>` |
+| Manual entry | `manual:<short-slug>-<date>` |
+
+Fallback when no stable natural ID: hash of (date + title + first evidence URL).
+
 ### Code hosts (GitHub, GitLab, Bitbucket)
 The PR description is the **primary source for entry content**. Read it carefully — most fields below can be inferred from it.
 
+Capture two categories of activity:
+
+1. **PRs you authored** (most entries).
+2. **Code reviews you performed on others' PRs** — but only *substantive* ones (see filter below).
+
+For PRs you authored:
+
 - **Title** → PR title (cleaned of conventional prefixes like `feat:`, `fix:`, `[ABC-123]`).
 - **Impact** → from PR description: look for "why", "motivation", "context", or business-value language. Extract the 1-line outcome. If the description has a "Summary" or "Why" section, prefer that.
-- **Skills** → from PR description + changed files: technologies mentioned (frameworks, languages, infra), patterns described (refactor, migration, perf optimization), domain (auth, billing, search). Free-form, not a fixed allowlist.
+- **Skills** → from PR description + changed files: technologies mentioned, patterns (refactor, migration, perf optimization), domain (auth, billing, search). Free-form, not a fixed allowlist.
 - **Project** → repo name (`owner/repo` → `repo` slug). Fallback if no ticket-tracker source.
-- **Type** → `shipped` (PR merged), `fixed` (PR with "fix"/"bug" labels), `reviewed` (PR I reviewed but didn't author — promote with caution; reviewer ≠ contributor of substance).
-- **Role** → `lead`/`contributor` (PR author), `reviewer` (PR reviewer).
+- **Type** → `shipped` (PR merged), `fixed` (PR with "fix"/"bug" labels).
+- **Role** → `lead` or `contributor` (you authored).
 - **Status** → `done` (PR merged), `in-progress` (PR open).
-- **Metrics** → +/- LOC, files changed, review approvals. Also pull any numeric claims from the PR description (e.g., "reduced p95 latency by 40%").
-- **Evidence** → PR URL, linked issues, linked tickets (rich cross-source signal).
+- **Metrics** → +/- LOC, files changed, review approvals. Also pull any numeric claims from the PR description.
+- **Evidence** → PR URL, linked issues, linked tickets.
 - **Raw context** → full PR description body, verbatim.
+
+For code reviews (PRs you reviewed, did not author):
+
+Capture **all reviews** — even `lgtm`-only ones. Review volume is itself a signal (e.g., "reviewed 40 PRs this quarter, including 12 substantive design reviews"). Downstream skills can group/filter by substance using the `Impact` field.
+
+- **Title** → `Reviewed: <PR title>` (cleaned).
+- **Impact** → describe what kind of review it was. Examples: `"Approved without comment"` (lgtm-only), `"Approved with minor stylistic comments"`, `"Requested changes — caught race condition before merge"`, `"Design discussion — guided cross-team API choice"`, `"Mentored junior eng through testing patterns"`. Honest assessment, not inflation.
+- **Type** → `reviewed`, or `mentored` if teaching-heavy (multiple explanatory comments for a junior author).
+- **Role** → `reviewer`.
+- **Stakeholders** → PR author role + count (e.g., "junior eng (1)") — never name them.
+- **Skills** → technical areas the review touched on (free-form; `—` if `lgtm`-only).
+- **Evidence** → PR URL + permalink to your most substantive comment if any.
+- **Raw context** → your review comments verbatim (not the PR description). Empty if `lgtm`-only.
 
 ### Ticket trackers (Jira, Linear, Asana, etc.)
 The ticket description + comments are the **primary source for entry content**, often richer than a PR description because they include problem framing, constraints, and acceptance criteria.
@@ -134,14 +171,31 @@ The ticket description + comments are the **primary source for entry content**, 
 
 ### Calendars (Google, Outlook)
 - **Project** → calendar event series name / parent meeting.
-- **Type** → infer from keywords: `presented` (demo, present, showcase), `mentored` (1:1 mentee, coaching), `decided` (decision review, RFC review).
+- **Type** → infer from keywords: `presented` (demo, present, showcase), `mentored` (1:1 mentee, coaching), `decided` (decision review, RFC review), `away` (PTO/holiday/off-site — see "Absence-context scan" below).
 - **Role** → `initiator` (organizer), `contributor` (attendee), `presenter` (explicit role in event title).
 - **Stakeholders** → attendee count + roles (never names).
 - **Evidence** → calendar event URL, attached docs.
 
+#### Absence-context scan
+
+Triggered when a per-day scan returns 0 candidates. Calendar is the primary source for absence context. Signals (in priority order):
+
+- Full-day events with keywords: `PTO`, `vacation`, `OOO`, `out of office`, `holiday`, `off`, `team day`, `off-site`, `conference`, `sick`, `personal day`.
+- Events explicitly marked free/busy = "out of office".
+- Recurring company holidays (if the calendar has a "Holidays in <country>" subscription).
+
+When a signal is found, emit one entry per day with:
+- **Type**: `away`
+- **Impact**: short reason — `"PTO"`, `"Public holiday — Canada Day"`, `"Team off-site"`, `"Conference: React Conf"`. Pull the human-readable phrasing from the event title.
+- **Evidence**: link to the triggering calendar event.
+- All other fields: `—`.
+
+If multiple signals overlap (e.g., a PTO + a team off-site on the same day), prefer the more specific one (off-site over PTO). Don't emit multiple `away` entries for the same day.
+
 ### Messaging (Slack, Teams)
-- **Hard rule**: filter strictly to messages *you posted*. Never pull others' messages.
-- **Scope**: broad — any channel/DM the user has access to. The filter happens at the content level (below). Optional `channels_blocklist` in config to always exclude specific channels.
+- **Default rule**: filter to messages *you posted*. Don't pull others' messages — privacy + signal-to-noise.
+- **Exception — shout-outs**: pull others' messages when they explicitly recognize the user (see "Shout-out filter" below). This is the one allowed case of capturing others' content.
+- **Scope**: broad — any channel/DM the user has access to. The filter happens at the content level (below). Optional `channels_blocklist` in config to always exclude specific channels. Separate `kudos_channels` allowlist for dedicated shout-out channels (treated specially — see below).
 - **Content filter** (the real work): only include messages that signal a **work accomplishment** — shipped, launched, decided, mentored, presented, learned-with-substance. Explicit excludes:
   - Personal venting / frustration ("ugh this is awful")
   - Complaints about coworkers
@@ -155,6 +209,36 @@ The ticket description + comments are the **primary source for entry content**, 
 - **Stakeholders** → channel scope only (e.g., "#eng-platform announcement"), not individual reactions.
 - **Evidence** → permalink to the message.
 
+### Shout-out filter (cross-source)
+
+A separate capture category — messages from others that explicitly recognize the user. Yields entries with `Type: recognized`.
+
+Detection rules (in priority order):
+
+1. **Dedicated kudos channels** (Slack `kudos_channels` config): every message in these channels that @-mentions the user OR contains their name is a candidate. These channels exist *for* recognition — high signal, low noise.
+2. **General channels / PR comments / ticket comments**: opportunistic detection. Candidate must have BOTH:
+   - A direct mention of the user (@-handle or name).
+   - At least one recognition signal: "thanks for", "shoutout to", "kudos", "great work", "amazing job", "really appreciated", "well done", "huge thanks", "saved the day", etc.
+
+   Filter out low-substance signals: "thanks!" alone in a transactional reply doesn't count. The recognition must be about specific work or impact.
+
+Entry shape for shout-outs:
+
+- **Title** → `Recognized for <topic>` synthesized from the message body (e.g., "Recognized for the onboarding launch", "Kudos for incident response on auth outage").
+- **Impact** → the recognition itself, in 1 line (e.g., "EM publicly thanked me for unblocking the team on auth migration").
+- **Type** → `recognized`.
+- **Role** → best-guess of your role in the work being recognized; `—` if no specific work is referenced.
+- **Stakeholders** → role of the person recognizing you, anonymized (`EM`, `PM`, `tech lead`, `senior eng`, `team`). Never their name. Count if multiple people piled on.
+- **Skills** → if the recognition mentions specific technical or soft skills demonstrated, capture them.
+- **Source** → the channel/PR/ticket where the shout-out happened.
+- **Evidence** → permalink to the message.
+- **Raw context** → verbatim recognition message(s).
+
+Skip rules:
+- Generic team-wide acknowledgements not directed at you ("thanks everyone for a great quarter").
+- Reactions/emojis without text recognition (a 🎉 isn't a brag-doc entry).
+- Recognition you already gave yourself (your own shipping announcement isn't a shout-out).
+
 ### Docs / wikis (Notion, Confluence, Google Docs)
 - **Project** → parent page / workspace section.
 - **Type** → `learned` (research/exploration docs), `decided` (RFC, ADR, design doc), `presented` (slide decks).
@@ -162,8 +246,73 @@ The ticket description + comments are the **primary source for entry content**, 
 - **Status** → `done` (published/locked), `in-progress` (draft).
 - **Evidence** → doc URL, linked discussions.
 
+### Data / analytics (Preset, Tableau, Looker, Metabase)
+- **Title** → chart/dashboard/dataset name.
+- **Impact** → from dashboard description or commit message; otherwise synthesize from chart titles + dataset purpose. Numeric outcomes if mentioned ("powers daily exec review", "drives Q2 OKR tracking").
+- **Skills** → SQL, dimensional modeling, viz design, data domain (finance, growth, ops). Visualization library if specified.
+- **Project** → workspace / folder / dashboard-group name.
+- **Type** → `built` (new chart/dashboard/dataset), `shipped` (published to a team-visible workspace), `decided` (when adding a metric that codifies a business definition).
+- **Role** → `lead`/`contributor` (creator), `reviewer` (commenter on someone else's chart).
+- **Status** → `done` (published), `in-progress` (draft / private workspace).
+- **Stakeholders** → owning team / consuming team if known from dashboard metadata.
+- **Metrics** → number of charts in a new dashboard, number of unique consumers if known, dataset row count if architecturally significant.
+- **Evidence** → chart URL, dashboard URL, dataset URL.
+- **Raw context** → dashboard description + chart titles list.
+- **Filter**: skip ad-hoc one-off charts that won't survive a week. Only include work likely to be referenced again (dashboards, named metrics, shared datasets). Heuristic: was it shared, named, or added to a team workspace? If no, probably skip.
+
 ### Cross-source enrichment
 When the same accomplishment appears in multiple sources (PR linked to a ticket linked to a calendar demo), **merge inference**: pick the highest-confidence value per field. Ticket-tracker fields usually win for `Project` and `Status`; code-host fields win for `Metrics` (LOC); calendar wins for `Type: presented`. Source ID should be the *primary* source (the one the user is most likely to remember) — usually the ticket if present, else the PR.
+
+## Vendor defaults
+
+When the wizard detects a known vendor MCP, it pre-fills suggestions from this table instead of asking everything cold. The user can override any default. Add new entries here when introducing new vendors.
+
+### GitHub
+- **Default capture**: PRs authored by user + all code reviews (review volume is itself a signal; substance is captured in `Impact`).
+- **Default repo filter**: all repos the user has activity in. Ask if they want to restrict.
+- **Default workflow note** (proposed to user): *"PRs are my primary unit of work; capture both authored PRs and all reviews."*
+
+### Ticket trackers (Jira, Linear, Asana)
+- **Default capture**: any ticket activity by the user in the window — tickets created, status changes (`To Do` → `In Progress` → `Done`/`Closed`/`Shipped`), assignment changes, substantive comments. Movement is signal; ticket lifecycle tells the story of work.
+- **Default Project inference**: epic name (best signal). Fallback to ticket title.
+- **Default workflow question**: *"Are tickets your unit of work, or are you mostly PR-driven with tickets as context? Should I capture tickets you reported but didn't work on?"*
+- **Default workflow note** (proposed): *"Tickets group work via epics; capture all activity (creation, status transitions, substantive comments) since ticket movement signals progress."*
+
+### Google Calendar
+- **Default capture**: events the user **accepted** (RSVP = yes). Skip declined, tentative, and no-response events — those weren't actually attended.
+- **Capture priority depends on usage** (the wizard's question below sets this):
+  - **Primary time management tool** — user blocks focus time with descriptions of work, time-blocks for tasks, uses calendar as their daily plan. Treat as **high-signal source**: scan all accepted events for accomplishment content, mine focus-block descriptions as primary text.
+  - **Mostly just meetings** — user doesn't time-block, calendar is meetings + appointments. Treat as **low-signal source**: only capture events matching strong keywords (`demo`, `launch`, `present`, `showcase`, `kickoff`, `retro`) and 1:1s with mentorship signals.
+- **Default capture keywords** (for low-signal mode): `shipped`, `launched`, `demo`, `presented`, `1:1`, `review`, `kickoff`.
+- **Absence detection**: always enabled (PTO/holiday/OOO/team-day) — see "Absence-context scan" above. Doesn't depend on the primary-vs-meetings classification.
+- **Default workflow question**: *"Is your calendar your primary time management tool — do you block focus time with descriptions of what you're working on, time-block for tasks? Or is it mostly just meetings? This sets how heavily I weight calendar as an accomplishment source."*
+
+### Slack / Teams
+- **Default scan scope**: all public channels the user is in.
+- **Default DM scope**: include the user's own messages; never others'. **Shout-out exception** (see "Shout-out filter" above): allow others' messages that directly recognize the user.
+- **Default `kudos_channels`**: empty — explicitly ask: *"Do you have any dedicated kudos / shout-out channels (e.g., `#kudos`, `#team-wins`)?"*
+- **Default `channels_blocklist`**: empty — the user can add channels they want to exclude.
+- **Default workflow question**: *"Do you announce shipped work in any specific channel? Are there channels worth always excluding (social, off-topic)?"*
+
+### Notion / Confluence / Google Docs
+- **Default capture**: pages the user authored or substantially edited (heuristic: ≥ 50% of diff is theirs, or they're the page creator).
+- **Default workflow question**: *"Which workspaces / parent pages contain work-related artifacts (RFCs, design docs, weekly notes)? Which are personal and should be excluded?"*
+- **Default skip**: comments-only edits, formatting-only edits, draft scratchpads in personal workspaces.
+
+### Preset / Tableau / Looker / Metabase
+- **Default capture**: dashboards + datasets created or substantially modified in the window.
+- **Default heuristic** for "substantial": chart is named (not auto-titled), published to a non-personal workspace, or has > 1 consumer.
+- **Default workflow question**: *"Which workspaces / folders contain dashboards you want tracked? Which are scratch space?"*
+
+### Wizard behavior
+
+For each detected MCP, the wizard:
+
+1. Shows the vendor defaults from this section as a structured prompt: *"Apply these defaults for \<vendor\>? Adjust before saving?"*
+2. For each default that requires user input (workflow question, channel allowlist, repo allowlist), asks a follow-up structured prompt with the suggested phrasing above.
+3. Saves the answers to `sources[].filter` and `sources[].workflow_notes`.
+
+When a new vendor is added that isn't in this table, the wizard asks the user from scratch and offers to save the resulting defaults here (via a code change, not at runtime — keeps the defaults curated).
 
 ## Extending the skill
 
@@ -201,9 +350,21 @@ Lives at `<folder>/config.json` (folder set by user in setup, default `~/Documen
   "timezone": "America/Toronto",
   "user_instructions": "Focus on technical leadership and cross-team work. Skip minor flake fixes.",
   "sources": [
-    { "type": "github", "filter": { "author": "me" } },
-    { "type": "calendar", "filter": { "keywords": ["shipped", "launched", "demo"] } },
-    { "type": "slack", "filter": { "channels_blocklist": [] } }
+    {
+      "type": "github",
+      "filter": { "author": "me" },
+      "workflow_notes": "PRs are my primary unit of work; capture both authored and substantive reviews."
+    },
+    {
+      "type": "calendar",
+      "filter": { "keywords": ["shipped", "launched", "demo"] },
+      "workflow_notes": "I block focus time with detailed descriptions of what I'm working on — treat focus blocks as primary content, not just metadata."
+    },
+    {
+      "type": "slack",
+      "filter": { "channels_blocklist": [] },
+      "workflow_notes": "I announce shipped work in #eng-platform; team updates go to #team-foo."
+    }
   ],
   "sync_to": [
     { "type": "notion", "page_id": "abc123" },
@@ -216,6 +377,7 @@ Lives at `<folder>/config.json` (folder set by user in setup, default `~/Documen
 
 - `user_instructions`: free-form preferences from the wizard's "any other instructions" step. Applied to every run's candidate filter. Empty string if the user has no extra preferences.
 - `folder` + `doc_filename` together resolve the brag doc path. All sibling files (`.brag-log.jsonl`, ad-hoc files, `cron.log`) live in the same folder.
+- `sources[].workflow_notes`: per-source free-form description of how the user uses that source. Captured during the wizard's per-source follow-up ("how do you use \<source\>?"). Passed into candidate filtering so the skill interprets signals correctly for the user's workflow. Updated by post-run reflection when patterns emerge.
 
 ### `.brag-log.jsonl` (one record per run)
 
@@ -238,17 +400,15 @@ Lives at `<folder>/.brag-log.jsonl`.
     { "type": "notion", "ok": true },
     { "type": "slack", "ok": true }
   ],
+  "reflection": {                          // present when post-run reflection was triggered
+    "trigger": "first_run",                // or "errors", "pattern_high_rejection", "pattern_unused_source"
+    "prompted": "First-run summary. Anything to refine?",
+    "changes_applied": ["calendar.workflow_notes updated"]
+  },
   "output_file": "brag-doc.md"             // or "brag-doc-adhoc-2026-05-23-last-2-weeks.md" for on-demand
 }
 ```
 
-### Entry shape (markdown)
+### Entry shape
 
-See [SKILL.md](SKILL.md) → "Entry shape" for the canonical field list and inference rules. Summary:
-
-- Every entry includes **all** fields, with `—` for unknowns.
-- Required fields (no `—` allowed): `Date`, `Evidence` (≥1 link), `Source`, `Logged`.
-- All other fields are nullable via `—`.
-- Raw context goes in a collapsed `<details>` block, omitted if the source has no body.
-
-The rich shape exists so downstream skills (project summaries, CV updates, perf-review drafts) can group/filter by `Project`, `Type`, `Role`, `Status`, `Skills` without re-fetching the original source.
+See [SKILL.md](SKILL.md) → "Entry shape" for the canonical field list and inference rules.

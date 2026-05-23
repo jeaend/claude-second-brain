@@ -9,9 +9,7 @@ The **capture layer** for an accomplishments workflow. Scans configured sources 
 
 ## What this produces
 
-- **Output unit**: zero or more brag-doc entries per day — typically 0–5, depending on activity. Each day gets its own `## YYYY-MM-DD` section with all that day's entries nested under it. Quiet days produce no entry; days with no activity stay absent from the doc (not "empty day" stubs).
-- **Output shape**: every entry has a rich, predictable structure (see "Entry shape" below) — fields for `Project`, `Type`, `Role`, `Status`, `Impact`, `Metrics`, `Skills`, `Stakeholders`, `Evidence`, plus verbatim raw context.
-- **This is prep, not the final artifact**: the brag doc is *input* to downstream skills — `brag-summary` (per-project recaps), `brag-to-cv` (resume bullets), `brag-perf-review` (perf-review drafts), `brag-weekly-recap` (team updates). The rich entry shape exists so those consumers can group/filter/synthesize without re-fetching original sources. See [REFERENCE.md](REFERENCE.md) → "Companion skills (planned)" for the consumer roster.
+A markdown brag doc, date-grouped (`## YYYY-MM-DD`), with zero or more structured entries per day (typically 0–5). Each entry has a rich, predictable shape (`Project`, `Type`, `Role`, `Status`, `Impact`, `Metrics`, `Skills`, `Stakeholders`, `Evidence`, raw context). This is the **capture layer** — downstream skills (`brag-summary`, `brag-to-cv`, `brag-perf-review`, `brag-weekly-recap`) consume the rich shape to synthesize CV bullets, perf-review drafts, etc. without re-fetching original sources. See [REFERENCE.md](REFERENCE.md) → "Companion skills" for the consumer roster.
 
 ## When to use
 
@@ -27,7 +25,25 @@ Trigger phrases:
 
 ## First-run setup
 
-The skill keeps a tiny pointer file at `~/.brag-doc-prep/path` containing the absolute path to the user's brag-doc folder. If that pointer does not exist (or the path it points to is missing), run the setup wizard:
+The skill keeps a tiny pointer file at `~/.brag-doc-prep/path` containing the absolute path to the user's brag-doc folder. If that pointer does not exist (or the path it points to is missing), run the setup wizard.
+
+**Wizard UX rule (interactive mode)**: ask every wizard step via a **structured question prompt** (the `AskUserQuestion` tool or equivalent UI question component), not as conversational text. Conversational questions get skipped, ignored, or answered ambiguously. Structured prompts force a deliberate choice and give the user "Other" for free-form input when needed. One question per step — don't bundle multiple decisions into one prompt. If running headlessly (`BRAG_DOC_PREP_MODE=cron`), there's no wizard — the config must already exist or the run errors out.
+
+**Persistent corrections rule (applies throughout the skill, not just the wizard)**: whenever the user *corrects* or *adjusts* the skill mid-flow — rejecting a candidate with a reason ("this isn't brag-worthy because X"), refining a filter ("don't include this channel"), changing a workflow note, overriding an inference, or pointing out an error in the output — **propose persisting that correction to `config.json` immediately**, via a structured prompt:
+
+> *"Apply this as a one-time override, or save to config so it sticks for future runs?"*
+
+Defaults to **save** when the correction looks generalizable (a filter, a workflow clarification, a recurring exclude). Defaults to **one-time** when the correction is clearly context-specific (this exact PR doesn't count for some idiosyncratic reason). Always show the user the proposed config diff before writing.
+
+Persistent corrections write to the most specific field they apply to:
+- A rejected-candidate reason → append to `user_instructions` or to the source's `workflow_notes`.
+- A specific channel/repo/page to exclude → append to that source's `channels_blocklist` / `repo_blocklist` / equivalent.
+- A path/folder change → update `folder`, `doc_filename`, or `sync_to[].target`.
+- A schedule adjustment → update `cron.schedule` / `cron.window`.
+
+After each persistent change, log it in `.brag-log.jsonl` (`corrections_applied: [...]`) so the user can audit what the skill learned.
+
+The wizard steps:
 
 1. Ask for the brag-doc folder. Default: `~/Documents/brag-doc/`. The folder holds:
    - `brag-doc.md` — the primary brag doc
@@ -37,47 +53,40 @@ The skill keeps a tiny pointer file at `~/.brag-doc-prep/path` containing the ab
    - `cron.log` — cron stdout/stderr (if cron is enabled)
 
    Create the folder if missing. If `brag-doc.md` exists inside it, read it and build the dedup index from any source IDs it already contains; warn (but don't refuse) on malformed entries. If missing, create it with a schema-version header (see "Entry shape" below).
-2. **Discover sources broadly.** Enumerate every MCP detected at runtime and offer any that could plausibly surface accomplishments — be inclusive, not selective. Common categories:
+2. **Discover and ask which sources to enable.** Enumerate every MCP detected at runtime, group them by category, then **explicitly ask the user (via a multi-select structured prompt) which to enable** as accomplishment sources. Be inclusive in what you offer — don't filter for the user; let them pick. Common categories the wizard should surface if MCPs are detected:
    - **Code hosts** — GitHub, GitLab, Bitbucket (PRs, commits, merged branches).
    - **Ticket trackers** — Jira, Linear, Asana, etc. (closed/shipped tickets, epics for `Project` inference).
    - **Calendars** — Google Calendar, Outlook (events with keywords like "shipped", "launched", "demo", "presented", "1:1").
    - **Messaging** — Slack, Teams (messages *you posted* — never pull others' messages). Scope can be broad (any channel/DM you have access to). The filtering happens at the **content level**: include only messages that signal a work accomplishment (shipped, launched, decided, mentored, presented, learned-with-substance). Skip personal venting, complaints about coworkers, social chatter (birthdays, lunch plans), logistics. Optional `channels_blocklist` in config for channels to always exclude.
    - **Docs / wikis** — Notion, Confluence, Google Docs (pages you authored or substantially edited).
+   - **Data / analytics** — Preset, Tableau, Looker, Metabase (dashboards you built, charts you authored, datasets you defined).
    - **Any other MCP** that exposes user activity — ask the user whether to include it.
 
-   For each enabled source, ask for filters (e.g., author=me, channel allowlist, keyword list). See [REFERENCE.md](REFERENCE.md) → "Source-specific inference hints" for what each source type can yield.
+   Sources can yield two kinds of entries:
+   - **Accomplishments** — work the user did (PRs, tickets, dashboards, etc.).
+   - **Shout-outs / recognition** — messages from others thanking, kudoing, or recognizing the user. These come *from others* but are still brag-worthy. The skill captures these too; see "Shout-out filter" in [REFERENCE.md](REFERENCE.md).
+
+   **After picking sources, pre-fill per-source defaults from [REFERENCE.md](REFERENCE.md) → "Vendor defaults", then confirm with the user.** People organize their work very differently — the same MCP yields wildly different signal quality depending on workflow. The wizard should ask a structured follow-up per enabled source: *"How do you use \<source\>? What does it capture?"* Examples of what to surface:
+
+   - **Ticket tracker (Jira/Linear/Asana)**: do you use individual tickets, epics for projects, both, or neither? Are tickets your unit of work, or is your work primarily in PRs that link back?
+   - **Google Calendar**: just meetings, or focus blocks with descriptions of what you worked on? Do you label events? Are demos/presentations in specific event series?
+   - **GitHub**: PRs you authored, code reviews you did, both? Repo allowlist or all repos?
+   - **Slack**: which channels are work channels worth scanning? Do you announce shipped work in any specific channel? **Are there dedicated kudos / shout-out channels** (e.g., `#kudos`, `#dse-kudos`, `#team-wins`)? Capture those separately for shout-out scanning — every message in those channels mentioning you is a candidate. Stored as `kudos_channels` in the source filter.
+   - **Notion/Confluence/Google Docs**: which workspaces / parent pages contain work artifacts? RFCs, design docs, weekly notes?
+   - **Preset/Tableau/Looker**: which workspaces/folders contain dashboards you build vs throwaway ad-hoc charts?
+
+   Store the answers in `sources[].workflow_notes` (free-form string). These notes are passed into candidate filtering on every run so the skill can interpret signals correctly for the user's workflow (e.g., "calendar focus blocks have detailed work descriptions — treat them as primary, not just metadata").
+
+   Also collect any structured filters (`author=me`, `channels`, `keyword list`, `repo allowlist`, `workspace IDs`). See [REFERENCE.md](REFERENCE.md) → "Source-specific inference hints" for what each source type can yield.
 3. Ask about optional sync targets. List available MCPs that could be destinations (Notion, Google Docs, etc.). For each, ask for the target identifier (page ID, doc ID). **Warn the user explicitly**: "Sync sends full entry content including raw source snippets to <target>. Continue?" — entry content may include real names, ticket IDs, and other data they may not want in the cloud target.
 4. Ask about cron: schedule (default `0 9 * * 1-5` — weekdays at 9am) and default window (default `24h`).
 5. Ask for the time zone to use for day-grouping. Default: local TZ. Sources report in mixed TZs (GitHub UTC, calendar local) — the skill normalizes to this TZ when bucketing entries to dates. Matches "what did I do today" intuition.
 6. Ask for **any other instructions** — free-form preferences the user wants applied to every run. Examples to surface: "focus on technical leadership work", "exclude minor bug fixes from CI flakes", "prioritize cross-team coordination", "always include security-related work", "skip anything tagged `chore`". Stored as `user_instructions` in config and applied at candidate-filtering time (the skill checks each candidate against these instructions before including it).
-7. Write the brag-doc folder structure:
-   - `<folder>/config.json` — schema below.
+7. Write two files:
+   - `<folder>/config.json` — full schema in [REFERENCE.md](REFERENCE.md) → "Config".
    - `~/.brag-doc-prep/path` — one-line pointer file containing the absolute path to `<folder>/config.json`.
 
-   Config schema:
-
-```json
-{
-  "schema_version": 1,
-  "folder": "~/Documents/brag-doc/",
-  "doc_filename": "brag-doc.md",
-  "timezone": "America/Toronto",
-  "user_instructions": "Focus on technical leadership and cross-team work. Skip minor flake fixes.",
-  "sources": [
-    {"type": "github", "filter": {"author": "me"}},
-    {"type": "calendar", "filter": {"keywords": ["shipped", "launched", "demo"]}},
-    {"type": "slack", "filter": {"channels_blocklist": []}}
-  ],
-  "sync_to": [
-    {"type": "notion", "page_id": "abc123"},
-    {"type": "slack", "target": "@me", "format": "summary"}
-  ],
-  "cron": {"schedule": "0 9 * * 1-5", "window": "24h"},
-  "confirm_before_writing": true
-}
-```
-
-   All derived paths come from `folder` + filename conventions (no need for absolute paths inside config). Set `user_instructions` to `""` if the user has no extra preferences.
+   All derived paths come from `folder` + filename conventions in config (no need for absolute paths). Set `user_instructions` to `""` if the user has no extra preferences.
 
 8. Offer to help install the cron entry. Don't silently edit `crontab` / `launchd` / Task Scheduler — always require explicit confirmation. Flow:
 
@@ -97,18 +106,33 @@ To re-run the wizard later: user says "reconfigure brag doc" → overwrite the c
 
 ## Run flow
 
-Detect mode:
+### Mode detection
 
-- `BRAG_DOC_PREP_MODE=cron` env var → **cron mode**: use config defaults, no prompts, write to the primary brag doc.
-- Otherwise → **on-demand mode**: parse the user's timeframe, write to a new file (see below), prompts according to `confirm_before_writing`.
+The `BRAG_DOC_PREP_MODE` environment variable is **authoritative** for interactivity. Check it first, before anything else.
+
+- **`BRAG_DOC_PREP_MODE=cron` set** → **cron mode**. This is *non-negotiable* — never prompt, never ask for confirmation, never run the wizard. Treat the user as absent. Even if the user supplied a custom timeframe in the prompt (e.g., "for yesterday", "last 24 hours"), respect the timeframe but suppress ALL prompts. Write directly to the primary brag doc, append-only. No ad-hoc file. No promote-to-main confirmations. No post-run reflection. If you would normally ask the user something, instead log the question/decision in `.brag-log.jsonl` (`silent_decisions: [...]`) and proceed with sensible defaults.
+- **Env var unset or any other value** → **on-demand mode**. Interactive. Parse the user's timeframe from the prompt. Write to a new ad-hoc file. Prompts allowed per `confirm_before_writing` config. Promote-to-main and post-run reflection happen here.
+
+**Common bug to avoid**: do not let "for yesterday" or any natural-language timeframe in the prompt override the env-var-based mode detection. The env var wins. If `BRAG_DOC_PREP_MODE=cron` is set, the run is silent regardless of what the prompt asks for.
 
 Then:
 
 1. Read config. If missing, run setup wizard first.
-2. Resolve the timeframe to a list of dates (most recent first).
+2. Resolve the timeframe to a list of dates (most recent first). **Adaptive window for cron mode**: instead of always using `cron.window` (e.g., 24h), read the most recent successful run from `.brag-log.jsonl` and start the scan from that run's end-time. If the gap from the last run is larger than `cron.window` (e.g., a weekend, a PTO week), the window auto-widens to cover everything since. This means a Monday 4:30pm cron after a Fri 4:30pm cron scans ~72h, not 24h — closing the weekend gap without manual backfills. If there's no prior successful run logged, fall back to `cron.window`. In on-demand mode, the timeframe comes from the user's prompt (no adaptation).
 3. For each date, run a **per-day scan** (see below).
 4. After all days, log the run to `.brag-log.jsonl` (next to the brag doc).
 5. Sync to each `sync_to` target. If a sync fails, log the failure and warn the user but don't roll back the local write.
+6. **Post-run reflection** (interactive mode only — skip when `BRAG_DOC_PREP_MODE=cron`). Trigger conditions:
+   - **First successful run** — always reflect after the first run, even if no issues.
+   - **Errors occurred** — source failed, sync failed, parsing issue, etc.
+   - **Pattern detected** — high user-rejection rate for a source (>50% of candidates rejected), repeated complaints in user feedback ("this isn't what I meant"), or unused source (consistently 0 candidates over multiple runs).
+
+   When triggered, surface the issue/observation and ask via a structured prompt whether to update config. Examples:
+   - *"Source `notion` failed twice this run — should I disable it, change filters, or leave as-is?"*
+   - *"You rejected 8 of 10 calendar candidates this run. Want to refine the calendar workflow notes / keywords?"*
+   - *"First-run summary: 5 entries captured across GitHub + Jira. Anything to refine before next run?"*
+
+   Apply accepted changes to `config.json`. Log the reflection outcome in `.brag-log.jsonl` (`reflection: {prompted: ..., changes_applied: ...}`).
 
 ### Per-day scan
 
@@ -123,8 +147,16 @@ For one date:
    - **Present, sparse** (existing entry has multiple `—` fields, the candidate has richer values for those fields) → update candidate.
    - **Present, equivalent** → skip.
    Ad-hoc files are not consulted for dedup; only the primary brag doc.
-4. If `confirm_before_writing: true` and in on-demand mode, show the user the day's candidates grouped as new / update / skip. Let them accept all, skip all, or decide individually.
-5. Write accepted entries to the destination file (see "Output destinations" below).
+4. **If 0 candidates after filtering**, run an **absence-context scan** before declaring the day quiet:
+   - Calendar: look for full-day events with keywords (`PTO`, `vacation`, `OOO`, `out of office`, `holiday`, `off`, `team day`, `off-site`, `conference`, `sick`).
+   - Calendar free/busy: events explicitly marked "out of office".
+   - Ticket trackers: PTO tickets in the user's name if the team tracks time that way.
+
+   If a reason is found, emit **one** entry with `Type: away`, brief `Impact` (`"PTO"`, `"Public holiday — Canada Day"`, `"Team off-site"`, `"Conference: React Conf"`), and the calendar event as `Evidence`. Most other fields stay `—`. This gives downstream skills (especially `brag-perf-review`) the context to explain gaps rather than reading them as low productivity.
+
+   If no reason is found, the day stays absent from the doc (current behavior — no entry).
+5. If `confirm_before_writing: true` and in on-demand mode, show the user the day's candidates grouped as new / update / skip / away-context. Let them accept all, skip all, or decide individually.
+6. Write accepted entries to the destination file (see "Output destinations" below).
 
 ## Entry shape
 
@@ -168,7 +200,7 @@ Group entries by the date in the configured `timezone` (see config in setup wiza
 |-------|---------|-------------------|-------------|
 | `Date` | When it happened (not when logged) | From source timestamp | n/a (required) |
 | `Project` | Grouping slug for project summaries | Ticket-tracker epic name (best signal — epics already group work into projects). Fallback: repo name / calendar title → slug | `—` |
-| `Type` | Taxonomy for filtering | Ticket type (`Story` → shipped/built, `Bug` → fixed, `Spike` → learned, etc.); PR merged → shipped; calendar "demo" → presented. Default values: `shipped`, `led`, `decided`, `fixed`, `learned`, `mentored`, `presented`. Users can add custom types. | `—` |
+| `Type` | Taxonomy for filtering | Ticket type (`Story` → shipped/built, `Bug` → fixed, `Spike` → learned, etc.); PR merged → shipped; calendar "demo" → presented; @-mention with kudos signal → recognized; absence-context scan → away. Default values: `shipped`, `led`, `decided`, `fixed`, `learned`, `mentored`, `presented`, `recognized`, `away`. Users can add custom types. | `—` |
 | `Role` | Distinguishes "I shipped this" from "I helped" — critical for honest CV. Values: `initiator`, `lead`, `contributor`, `reviewer`, `advisor` | Ticket assignee/reporter; PR author/reviewer; calendar role | `—` |
 | `Status` | Projects don't end on ship date. Values: `done`, `in-progress`, `ongoing`, `abandoned` | Ticket status field (best signal); else default `done` for shipped items, `in-progress` otherwise | `—` |
 | `Impact` | The "so what" in one line | Best summary from source description | `—` |
@@ -187,18 +219,7 @@ When inferring a field: pick the best-confidence value. If confidence is low (mu
 
 ## Source IDs
 
-Stable, greppable identifiers used for dedup. Format: `<source-type>:<unique-key>`.
-
-- GitHub PR: `github:owner/repo#1234`
-- GitHub issue: `github:owner/repo!1234`
-- Ticket tracker: `<tracker>:<ticket-id>` (e.g. `linear:ENG-5678`, `jira:PROJ-1234`)
-- Calendar event: `calendar:<event-id>`
-- Slack message: `slack:<workspace>:<channel>:<ts>`
-- Notion page edit: `notion:<page-id>` (use revision ID if available)
-- Google Doc edit: `gdoc:<doc-id>:<revision>`
-- Manual entry: `manual:<short-slug>-<date>`
-
-If a source's natural ID isn't stable, fall back to a hash of (date + title + first evidence URL). See [REFERENCE.md](REFERENCE.md) for per-source ID and inference details.
+Stable, greppable identifiers used for dedup. Format: `<source-type>:<unique-key>` (e.g. `github:owner/repo#1234`, `jira:PROJ-1234`). If a source's natural ID isn't stable, fall back to a hash of (date + title + first evidence URL). Full list of source-ID formats in [REFERENCE.md](REFERENCE.md) → "Source-specific inference hints".
 
 ## Output destinations
 
@@ -226,9 +247,10 @@ Supported sync target types:
 - `notion` — appends each entry as a block to a Notion page. Required: `page_id`.
 - `google-docs` — appends entries to a Google Doc. Required: `doc_id`.
 - `slack` — posts to a Slack DM or channel. Required: `target` (`@me` for self-DM, `@username` for another user's DM — discouraged, or `#channel` for a channel). Optional: `format`:
-  - `summary` (default) — one line per day in the form `<YYYY-MM-DD>: <short synthesized summary, with supporting links inline>`. Example:
-    > `2026-05-23: Shipped onboarding flow ([PR #1234](url)); fixed auth race condition ([JIRA-456](url)); mentored junior eng on testing patterns.`
-    For a multi-day backfill, post one such line per day, newest first.
+  - `summary` (default) — one line per day in the form `<YYYY-MM-DD>: <prose paragraph synthesizing the day's accomplishments, with supporting links inline>`. **Format as flowing prose**, not a list. Combine the day's entries into 1–3 sentences that read naturally. Drop semicolon-joined lists in favor of connecting sentences. Example:
+    > `2026-05-23: Shipped the new onboarding flow ([PR #1234](url)), which cut activation time from 4 days to 8 hours. Also fixed an auth race condition that was occasionally locking out new sessions ([JIRA-456](url)), and mentored a junior engineer on testing patterns during code review.`
+
+    For a multi-day backfill, post one such line per day, newest first. If a day had only one entry, the summary is one sentence; if many, allow 2–3 sentences but keep it scannable.
   - `full` — each entry posted as a separate message with all fields (sensitive — see safety rules below).
 
 **Slack sync safety rules**:

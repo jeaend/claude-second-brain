@@ -7,7 +7,7 @@ Captures professional accomplishments to a personal brag doc — runs daily via 
 ```mermaid
 flowchart TD
     Start([Invoke skill]) --> Cfg{Configured?}
-    Cfg -->|No| Wiz[Setup wizard:<br/>folder, sources, sync,<br/>cron, TZ, instructions]
+    Cfg -->|No| Wiz[Setup wizard<br/>structured prompts:<br/>folder, sources + workflow_notes,<br/>sync, cron, TZ, user_instructions]
     Wiz --> CronInstall{Install cron?}
     CronInstall -->|Yes, w/ confirm| Ready([Ready])
     CronInstall -->|Skip| Ready
@@ -19,7 +19,7 @@ flowchart TD
     C --> Loop[For each date,<br/>latest first]
     O --> Loop
 
-    Loop --> Scan[Per-day scan:<br/>query sources →<br/>apply user_instructions →<br/>content filter →<br/>classify vs main doc<br/>new / update / skip]
+    Loop --> Scan[Per-day scan:<br/>query sources →<br/>apply workflow_notes +<br/>user_instructions →<br/>content filter →<br/>classify vs main doc<br/>new / update / skip]
 
     Scan --> W{Mode}
     W -->|cron| MainAppend[Append new entries<br/>to main brag doc<br/>append-only]
@@ -33,7 +33,13 @@ flowchart TD
     More -->|yes| Scan
     More -->|no| Sync[Sync to targets<br/>Notion / Google Docs / Slack<br/>best-effort]
     Sync --> Log[Append run to<br/>.brag-log.jsonl]
-    Log --> Done([Done])
+    Log --> RM{Interactive?<br/>first run, errors,<br/>or pattern?}
+    RM -->|no| Done([Done])
+    RM -->|yes| Reflect[Post-run reflection:<br/>surface issues, ask user<br/>to update config]
+    Reflect --> Apply{Apply<br/>changes?}
+    Apply -->|user accepts| WriteCfg[Update config.json]
+    Apply -->|skip| Done
+    WriteCfg --> Done
 ```
 
 ## Trigger phrases
