@@ -54,6 +54,28 @@ BRAG_DOC_PREP_MODE=cron claude -p "Run the brag-doc-prep skill for today only"
 
 If a source fails, the skill logs the failure to `.brag-log.jsonl` and continues with remaining sources — the cron job won't silently produce empty days.
 
+### Pre-approving tool permissions
+
+Claude Code's permission system blocks tool calls that aren't pre-approved when running non-interactively. Interactively you'd see a permission prompt; under `claude -p` there's no one to approve, so the call either fails or the skill exits cleanly without writing anything.
+
+At minimum, pre-approve the write to your brag-doc folder, and any MCP tools the skill uses as sync targets. Add to `~/.claude/settings.json`:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "Write(/path/to/your/brag-doc/**)",
+      "Edit(/path/to/your/brag-doc/**)",
+      "mcp__<your-slack-mcp>__send_self_dm"
+    ]
+  }
+}
+```
+
+Match the path to the `folder` value in `config.json`. Add MCP entries only for sources/sync targets you've enabled.
+
+Symptom if missing: `cron.log` shows the skill ran and exited 0, but `brag-doc.md` and `.brag-log.jsonl` are not updated. The tail of `cron.log` will typically contain text like "permission not yet granted" or "the write is awaiting approval" — the skill acknowledging the block in its final response, then exiting.
+
 ### Output and debugging
 
 Redirect stdout + stderr to a log file so failures are diagnosable after the fact. The cron-install step bakes the user's brag-doc folder path directly into the cron line, so `cron.log` ends up inside that folder:
@@ -69,6 +91,7 @@ To diagnose a failing cron job:
 1. Read `<brag-doc-prep-folder>/cron.log` — captures shell-level errors (auth missing, command not found).
 2. Read `<brag-doc-prep-folder>/.brag-log.jsonl` — captures skill-level info (sources scanned, failures per source).
 3. If both are silent, the cron itself isn't firing. Check with `grep CRON /var/log/syslog` (Linux) or `log show --predicate 'process == "cron"' --last 1d` (macOS).
+4. If `cron.log` shows the skill ran (start + exit markers present) but the brag doc and `.brag-log.jsonl` weren't updated, the cause is almost always missing tool permissions — see "Pre-approving tool permissions" above.
 
 ### Platform-specific schedulers
 
